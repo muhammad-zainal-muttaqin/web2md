@@ -9,6 +9,8 @@ A minimal Chrome extension that converts the current tab — or pasted HTML — 
 - **One-click conversion** — click the icon, click Convert, get Markdown.
 - **Paste HTML fallback** — for paywalled / login-walled pages, paste the raw HTML and convert offline.
 - **Smart content extraction** — 30+ site-aware selectors pick the main article (Wikipedia, GitHub, Reddit, Stack Overflow, MDN, dev.to, blogs, docs sites), with density-based fallback for the long tail.
+- **Aggressive noise stripping** — removes reader settings, chapter nav, comments, ads, tracker pixels, sidebars, and ~80 other class/id/role/aria-label patterns.
+- **GFM output** — strikethrough, task lists, tables, fenced code blocks, definition lists, `<details>`, `<mark>`, sub/sup.
 - **Copy or download** — clipboard copy or `.md` download named after the page title.
 - **Three output views** — Markdown / Raw HTML / Page Meta.
 - **Light + dark theme** — auto-adapts to your system.
@@ -41,7 +43,10 @@ web2md/
 ├── popup.js            # Content extraction + Markdown converter
 ├── icons/              # 16/32/48/128 px toolbar icons
 ├── scripts/
-│   └── gen-icons.cjs   # Regenerate icons (Node, no deps)
+│   ├── gen-icons.cjs   # Regenerate icons (Node, no deps)
+│   └── test-popup.cjs  # Local converter test (requires jsdom)
+├── test/
+│   └── sakuranovel-sample.html  # Synthetic sample for testing
 ├── docs/               # VitePress documentation site
 │   ├── .vitepress/
 │   ├── index.md
@@ -73,6 +78,28 @@ pnpm install
 pnpm run docs:dev
 ```
 
+## Development
+
+To run the converter test locally:
+
+```sh
+npm install --no-save jsdom
+node scripts/test-popup.cjs test/sakuranovel-sample.html
+```
+
+Or point it at any URL or local HTML file:
+
+```sh
+node scripts/test-popup.cjs https://example.com/article
+node scripts/test-popup.cjs ./my-page.html
+```
+
+To regenerate icons:
+
+```sh
+node scripts/gen-icons.cjs
+```
+
 ## Permissions
 
 The extension requests the minimum:
@@ -87,11 +114,14 @@ It does **not** request `<all_urls>`, history, storage, cookies, or any other br
 1. Click the toolbar icon to open the popup.
 2. Click **Convert**. The popup calls `chrome.scripting.executeScript` to read `document.documentElement.outerHTML` of the active tab.
 3. The HTML is fed into a content extractor that:
-   - Tries 30+ site-aware CSS selectors in order (`main article`, `article`, `.post-content`, `.markdown-body`, `#honbun`, etc.).
+   - Tries 30+ site-aware CSS selectors in order (`main article`, `article`, `.post-content`, `.markdown-body`, `.chapter-content`, etc.).
    - Falls back to a density-based selector that picks the element with the highest text-to-link ratio.
-   - Strips `script`, `style`, `nav`, `footer`, `aside`, `[aria-hidden]`, and obvious ad/sidebar classes.
-4. The cleaned DOM is walked to produce Markdown — headings, paragraphs, lists, blockquotes, code blocks, tables, links, images, emphasis.
-5. Result is shown in three tabs: Markdown / Raw / Meta.
+   - Strips `script`, `style`, `nav`, `footer`, `aside`, `form`, `input`, `button`, `iframe`, `svg`, `figure`, and ~80 noise patterns matched by class/id/role/aria-label.
+   - Removes tracker pixels (histats, GA, GTM, FB, etc.) and 1×1 images.
+   - Replaces `javascript:` and `#` hrefs with plain text.
+4. The cleaned DOM is walked to produce GFM-flavored Markdown — headings, paragraphs, lists (including task lists), blockquotes, code blocks, tables, links, images, emphasis, strikethrough, definition lists, `<details>`.
+5. The first heading is auto-removed if it duplicates the page title.
+6. Result is shown in three tabs: Markdown / Raw / Meta.
 
 The execution happens in the **ISOLATED** world — page scripts are not affected, and the extension never sees the page's JavaScript context.
 

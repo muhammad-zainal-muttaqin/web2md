@@ -10,6 +10,10 @@ docs/.vitepress/cache/
 docs/.vitepress/dist/
 docs/node_modules/
 
+# Test artifacts
+test/*.html
+!test/sakuranovel-sample.html
+
 # Extension packaging
 *.zip
 *.crx
