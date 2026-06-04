@@ -22,6 +22,14 @@ const MAIN_SELECTORS = [
   '.bookcontent',
   '.novelbody',
   '.novel_view',
+  '.chapter-content',
+  '.chapter__content',
+  '.reading-content',
+  '.reading-content__inner',
+  '.reader-content',
+  '#chapter-content',
+  '#chapter-container',
+  '#reader-content',
   '#honbun',
   '.p-novel',
   '#novel_contents',
@@ -34,17 +42,141 @@ const MAIN_SELECTORS = [
   '#body',
 ];
 
-const SKIP_TAGS = new Set([
-  'script', 'style', 'noscript', 'iframe', 'svg', 'path',
-  'header', 'footer', 'nav', 'aside', 'form', 'button',
-  'figure', 'figcaption', 'canvas', 'video', 'audio',
+const NOISE_TAGS = new Set([
+  'script', 'style', 'noscript', 'iframe', 'svg', 'path', 'link', 'meta',
+  'form', 'button', 'input', 'select', 'textarea', 'label', 'fieldset', 'legend',
+  'figure', 'figcaption', 'canvas', 'video', 'audio', 'source', 'track',
+  'object', 'embed', 'param', 'applet',
 ]);
 
 const BLOCK_TAGS = new Set([
   'p', 'div', 'section', 'article', 'main', 'header', 'footer',
   'nav', 'aside', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'blockquote', 'pre', 'table', 'tr', 'figure', 'br', 'hr',
+  'blockquote', 'pre', 'table', 'tr', 'figure', 'br', 'hr', 'details', 'summary',
 ]);
+
+const NOISE_ID_CLASS_RE = new RegExp([
+  'reader[-_ ]?settings?',
+  'settings?',
+  'reading[-_ ]?settings?',
+  'font[-_ ]?size',
+  'text[-_ ]?size',
+  'font[-_ ]?family',
+  'font[-_ ]?selector',
+  'font[-_ ]?changer',
+  'theme[-_ ]?switcher',
+  'controls?',
+  'control[-_ ]?bar',
+  'nav(igation)?',
+  'menu',
+  'breadcrumb',
+  'pagination',
+  'pager',
+  'sidebar',
+  'side[-_ ]?bar',
+  'footer',
+  'site[-_ ]?footer',
+  'page[-_ ]?footer',
+  'header',
+  'site[-_ ]?header',
+  'page[-_ ]?header',
+  'banner',
+  'share',
+  'sharing',
+  'social',
+  'follow',
+  'related',
+  'recommend',
+  'popular',
+  'trending',
+  'comment',
+  'disqus',
+  'reply',
+  'respond',
+  'form',
+  'search',
+  'login',
+  'signin',
+  'signup',
+  'register',
+  'subscribe',
+  'newsletter',
+  'ad[-_ ]?(vert|block|slot|wrap|inner|content|container|holder|unit)?',
+  'advert(isement|ising)?',
+  'sponsor',
+  'promo(tion)?',
+  'popup',
+  'modal',
+  'cookie',
+  'notice',
+  'alert',
+  'toolbar',
+  'tabpanel',
+  'tablist',
+  'tags?',
+  'categories?',
+  'archive',
+  'histats',
+  'tracker',
+  'analytics',
+  'stat(s|istics)?',
+  'rating',
+  'vote',
+  'reaction',
+  'byline',
+  'author[-_ ]?(info|bio|box)',
+  'post[-_ ]?meta',
+  'article[-_ ]?meta',
+  'entry[-_ ]?meta',
+  'meta[-_ ]?info',
+  'posted',
+  'published',
+  'modified',
+  'chapters?[-_ ]?nav',
+  'chapter[-_ ]?navigation',
+  'series[-_ ]?nav',
+  'next[-_ ]?prev',
+  'prev[-_ ]?next',
+  'wp[-_ ]?block',
+  'elementor',
+  'wpb_wrapper',
+  'flavor',
+  'next[-_ ]?chapter',
+  'prev[-_ ]?chapter',
+  'chapter[-_ ]?list',
+  'table[-_ ]?of[-_ ]?contents',
+  'toc',
+  'index[-_ ]?list',
+  'series[-_ ]?info',
+  'series[-_ ]?description',
+  'series[-_ ]?cover',
+  'bookmark',
+  'report',
+  'flag',
+  'edit[-_ ]?link',
+  'screen[-_ ]?reader',
+  'skip[-_ ]?link',
+  'a11y',
+  'sr[-_ ]?only',
+  'visually[-_ ]?hidden',
+  'overflow[-_ ]?announce',
+].join('|'), 'i');
+
+const NOISE_ARIA_LABEL_RE = new RegExp([
+  'navigation', 'comment', 'menu', 'footer', 'sidebar', 'header', 'share',
+  'social', 'related', 'search', 'login', 'signup', 'register', 'subscribe',
+  'newsletter', 'advert', 'ad', 'promo', 'popup', 'modal', 'cookie', 'banner',
+  'notice', 'alert', 'chapter', 'series', 'settings', 'theme', 'font',
+].join('|'), 'i');
+
+const NOISE_ROLES = new Set([
+  'navigation', 'banner', 'contentinfo', 'search', 'complementary',
+  'form', 'dialog', 'menu', 'menubar', 'toolbar', 'tablist', 'tab',
+  'tabpanel', 'status', 'alert', 'log', 'marquee', 'timer',
+]);
+
+const JAVASCRIPT_HREF_RE = /^(javascript|vbscript|data):/i;
+const TRACKER_DOMAIN_RE = /(sstatic\d*\.histats\.com|google-analytics\.com|googletagmanager\.com|doubleclick\.net|facebook\.com\/tr|analytics\.twitter\.com|connect\.facebook\.net|mc\.yandex\.ru|hotjar\.com|cdn\.segment\.io|mixpanel\.com|amplitude\.com|fullstory\.com|logrocket\.com)/i;
 
 function setStatus(text, state = '') {
   const el = document.getElementById('status');
@@ -80,7 +212,8 @@ function pickMain(doc) {
     if (!node) continue;
     const text = (node.textContent || '').trim();
     if (text.length < 100) continue;
-    const score = text.length - (node.querySelectorAll('a, button, nav').length * 5);
+    const linkPenalty = node.querySelectorAll('a').length * 3;
+    const score = text.length - linkPenalty;
     if (score > bestScore) {
       best = node;
       bestScore = score;
@@ -90,37 +223,132 @@ function pickMain(doc) {
   const all = root.querySelectorAll('div, section, article');
   for (const node of all) {
     const text = (node.textContent || '').trim();
-    if (text.length > bestScore) {
+    const linkPenalty = node.querySelectorAll('a').length * 3;
+    const score = text.length - linkPenalty;
+    if (score > bestScore) {
       best = node;
-      bestScore = text.length;
+      bestScore = score;
     }
   }
   return best || root;
 }
 
+function shouldSkipEl(el) {
+  if (!el || el.nodeType !== 1) return false;
+  if (el.hasAttribute('aria-hidden') && el.getAttribute('aria-hidden') !== 'false') return true;
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  if (role && NOISE_ROLES.has(role)) return true;
+  const ariaLabel = el.getAttribute('aria-label') || '';
+  if (ariaLabel && NOISE_ARIA_LABEL_RE.test(ariaLabel)) return true;
+  const id = el.id || '';
+  if (id && NOISE_ID_CLASS_RE.test(id)) return true;
+  const cls = (typeof el.className === 'string' && el.className) || '';
+  if (cls && NOISE_ID_CLASS_RE.test(cls)) return true;
+  const data = el.getAttribute('data-testid') || el.getAttribute('data-component') || el.getAttribute('data-role') || '';
+  if (data && NOISE_ID_CLASS_RE.test(data)) return true;
+  return false;
+}
+
+function shouldSkipImg(img) {
+  const src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '';
+  const w = parseInt(img.getAttribute('width') || '0', 10);
+  const h = parseInt(img.getAttribute('height') || '0', 10);
+  const style = (img.getAttribute('style') || '').toLowerCase();
+  if (style.includes('display:none') || style.includes('display: none') || style.includes('visibility:hidden') || style.includes('visibility: hidden')) return true;
+  if (w > 0 && w < 4) return true;
+  if (h > 0 && h < 4) return true;
+  if (TRACKER_DOMAIN_RE.test(src)) return true;
+  if (/\b(pixel|tracker|trck|counter|stat|spacer|blank|tracking)\b/i.test(src)) return true;
+  if (img.getAttribute('alt') === '' && img.getAttribute('role') === 'presentation') return true;
+  return false;
+}
+
 function clean(root) {
   const cloned = root.cloneNode(true);
-  for (const tag of SKIP_TAGS) {
+
+  for (const tag of NOISE_TAGS) {
     cloned.querySelectorAll(tag).forEach((el) => el.remove());
   }
-  cloned.querySelectorAll('[aria-hidden="true"]').forEach((el) => el.remove());
-  cloned.querySelectorAll('.ad, .ads, .advert, .advertisement, .sidebar, .comments, .related, .share, .social, .breadcrumb, .menu, .pagination, .nav, .footer, .header').forEach((el) => el.remove());
+
+  const all = Array.from(cloned.querySelectorAll('*'));
+  for (const el of all) {
+    if (shouldSkipEl(el)) {
+      el.remove();
+    }
+  }
+
+  cloned.querySelectorAll('img').forEach((img) => {
+    if (shouldSkipImg(img)) img.remove();
+  });
+
+  cloned.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (JAVASCRIPT_HREF_RE.test(href.trim())) {
+      const text = a.textContent || '';
+      if (text.trim()) {
+        const span = cloned.ownerDocument.createElement('span');
+        span.textContent = text;
+        a.replaceWith(span);
+      } else {
+        a.remove();
+      }
+    } else if (href === '#') {
+      const text = a.textContent || '';
+      if (text.trim()) {
+        const span = cloned.ownerDocument.createElement('span');
+        span.textContent = text;
+        a.replaceWith(span);
+      } else {
+        a.remove();
+      }
+    }
+  });
+
+  cloned.querySelectorAll('[style]').forEach((el) => el.removeAttribute('style'));
+  cloned.querySelectorAll('[width="0"], [height="0"]').forEach((el) => el.remove());
+
   return cloned;
 }
 
+function normalizeWhitespace(s) {
+  return s.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
+}
+
+function getCleanText(node) {
+  return normalizeWhitespace(node.textContent || '');
+}
+
 function escapeMd(text) {
-  return text.replace(/([\\`*_{}\[\]()#+\-.!|])/g, '\\$1');
+  return text.replace(/([\\`*_{}\[\]()#+\-.!|>])/g, '\\$1');
+}
+
+function getAttr(node, name) {
+  return (node.getAttribute(name) || '').trim();
+}
+
+function imgAlt(img) {
+  return getAttr(img, 'alt') || getAttr(img, 'title') || 'image';
+}
+
+function imgSrc(img) {
+  return getAttr(img, 'src') || getAttr(img, 'data-src') || getAttr(img, 'data-lazy-src') || getAttr(img, 'data-original') || '';
 }
 
 function inline(node) {
-  if (node.nodeType === 3) return node.nodeValue.replace(/\s+/g, ' ');
+  if (node.nodeType === 3) {
+    return node.nodeValue.replace(/[\t ]+/g, ' ').replace(/\n/g, ' ');
+  }
   if (node.nodeType !== 1) return '';
   const tag = node.tagName.toLowerCase();
+  if (NOISE_TAGS.has(tag)) return '';
+  if (shouldSkipEl(node)) return '';
   if (tag === 'br') return '\n';
   if (tag === 'a') {
-    const href = node.getAttribute('href') || '';
+    const href = getAttr(node, 'href');
     const text = Array.from(node.childNodes).map(inline).join('').trim();
-    if (!text || !href || href.startsWith('javascript:')) return text;
+    if (!text) return '';
+    if (!href) return text;
+    if (JAVASCRIPT_HREF_RE.test(href) || href === '#') return text;
     return `[${text}](${href})`;
   }
   if (tag === 'strong' || tag === 'b') {
@@ -131,66 +359,195 @@ function inline(node) {
     const text = Array.from(node.childNodes).map(inline).join('').trim();
     return text ? `*${text}*` : '';
   }
-  if (tag === 'code') {
+  if (tag === 'del' || tag === 's' || tag === 'strike') {
+    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    return text ? `~~${text}~~` : '';
+  }
+  if (tag === 'code' && node.parentElement && node.parentElement.tagName.toLowerCase() !== 'pre') {
     const text = node.textContent || '';
-    return `\`${text.replace(/`/g, '\\`')}\``;
+    return text ? `\`${text.replace(/`/g, '\\`')}\`` : '';
   }
   if (tag === 'img') {
-    const alt = node.getAttribute('alt') || '';
-    const src = node.getAttribute('src') || '';
+    const alt = imgAlt(node);
+    const src = imgSrc(node);
     if (!src) return '';
     return `![${alt}](${src})`;
   }
-  if (SKIP_TAGS.has(tag)) return '';
+  if (tag === 'mark') {
+    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    return text ? `==${text}==` : '';
+  }
+  if (tag === 'sub') {
+    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    return text ? `~${text}~` : '';
+  }
+  if (tag === 'sup') {
+    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    return text ? `^${text}^` : '';
+  }
+  if (tag === 'abbr' || tag === 'acronym') {
+    const title = getAttr(node, 'title');
+    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    if (title && text) return `${text} (${title})`;
+    return text;
+  }
+  if (tag === 'kbd' || tag === 'samp') {
+    const text = node.textContent || '';
+    return text ? `\`${text}\`` : '';
+  }
+  if (tag === 'q') {
+    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    return text ? `“${text}”` : '';
+  }
+  if (tag === 'cite') {
+    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    return text ? `*${text}*` : '';
+  }
+  if (tag === 'dfn') {
+    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    return text ? `*${text}*` : '';
+  }
+  if (tag === 'small') {
+    return Array.from(node.childNodes).map(inline).join('');
+  }
+  if (tag === 'u') {
+    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    return text;
+  }
+  if (tag === 'span' || tag === 'font') {
+    return Array.from(node.childNodes).map(inline).join('');
+  }
   return Array.from(node.childNodes).map(inline).join('');
+}
+
+function isBlock(tag) {
+  return BLOCK_TAGS.has(tag) || ['dl', 'dt', 'dd', 'address', 'hr', 'div'].includes(tag);
+}
+
+function isListItem(node) {
+  return node.nodeType === 1 && node.tagName.toLowerCase() === 'li';
+}
+
+function isChecklistItem(li) {
+  const text = li.textContent || '';
+  return /^\s*\[[ xX✓]\]\s*/.test(text);
 }
 
 function block(node, depth = 0) {
   if (node.nodeType === 3) {
-    const text = node.nodeValue.trim();
+    const text = node.nodeValue.replace(/\s+/g, ' ').trim();
     return text ? text + '\n\n' : '';
   }
   if (node.nodeType !== 1) return '';
   const tag = node.tagName.toLowerCase();
-  if (SKIP_TAGS.has(tag)) return '';
+  if (NOISE_TAGS.has(tag)) return '';
+  if (shouldSkipEl(node)) return '';
+
   if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag)) {
     const level = parseInt(tag[1]);
-    const text = Array.from(node.childNodes).map(inline).join('').trim();
-    return text ? '#'.repeat(level) + ' ' + text + '\n\n' : '';
+    const text = normalizeWhitespace(Array.from(node.childNodes).map(inline).join(''));
+    if (!text) return '';
+    return '#'.repeat(level) + ' ' + text + '\n\n';
   }
+
   if (tag === 'p') {
-    const text = Array.from(node.childNodes).map(inline).join('').trim();
+    const text = normalizeWhitespace(Array.from(node.childNodes).map(inline).join(''));
     return text ? text + '\n\n' : '';
   }
+
   if (tag === 'blockquote') {
-    const inner = Array.from(node.childNodes).map((n) => block(n, depth + 1)).join('').trim();
-    return inner ? inner.split('\n').map((l) => '> ' + l).join('\n') + '\n\n' : '';
+    const inner = normalizeWhitespace(Array.from(node.childNodes).map((n) => block(n, depth + 1)).join(''));
+    if (!inner) return '';
+    return inner.split('\n').map((l) => l ? '> ' + l : '>').join('\n') + '\n\n';
   }
+
   if (tag === 'pre') {
     const code = node.querySelector('code') || node;
+    const lang = getAttr(code, 'class').match(/language-(\S+)/i)?.[1] || getAttr(node, 'class').match(/language-(\S+)/i)?.[1] || '';
     const text = (code.textContent || '').replace(/\n$/, '');
-    return '```\n' + text + '\n```\n\n';
+    return '```' + lang + '\n' + text + '\n```\n\n';
   }
+
   if (tag === 'ul' || tag === 'ol') {
-    const items = Array.from(node.children).filter((c) => c.tagName.toLowerCase() === 'li');
-    return items.map((li, i) => {
-      const text = Array.from(li.childNodes).map((n) => block(n, depth + 1)).join('').trim();
+    const items = Array.from(node.children).filter(isListItem);
+    if (!items.length) {
+      return Array.from(node.childNodes).map((n) => block(n, depth + 1)).join('');
+    }
+    let out = '';
+    items.forEach((li, i) => {
       const marker = tag === 'ol' ? `${i + 1}.` : '-';
-      return text ? marker + ' ' + text.replace(/\n+/g, '\n  ') + '\n' : '';
-    }).join('') + '\n';
+      const inner = normalizeWhitespace(Array.from(li.childNodes).map((n) => block(n, depth + 1)).join(''));
+      if (!inner) return;
+      const checklist = isChecklistItem(li);
+      let content = inner;
+      if (checklist) {
+        const m = li.textContent.match(/^\s*\[( |x|X|✓)\]\s*/);
+        const checked = m && m[1].toLowerCase() === 'x' || (m && m[1] === '✓');
+        content = inner.replace(/^\s*/, '');
+        const actualMarker = checked ? '- [x]' : '- [ ]';
+        out += actualMarker + ' ' + content.replace(/\n+/g, '\n  ') + '\n';
+      } else {
+        out += marker + ' ' + content.replace(/\n+/g, '\n  ') + '\n';
+      }
+    });
+    return out + '\n';
   }
+
+  if (tag === 'dl') {
+    let out = '';
+    Array.from(node.children).forEach((child) => {
+      const t = child.tagName.toLowerCase();
+      if (t === 'dt') {
+        const text = normalizeWhitespace(Array.from(child.childNodes).map(inline).join(''));
+        if (text) out += '**' + text + '**\n';
+      } else if (t === 'dd') {
+        const text = normalizeWhitespace(Array.from(child.childNodes).map(inline).join(''));
+        if (text) out += ': ' + text + '\n';
+      }
+    });
+    return out + '\n';
+  }
+
   if (tag === 'table') {
     return renderTable(node) + '\n\n';
   }
+
   if (tag === 'hr') return '\n---\n\n';
+
   if (tag === 'img') {
-    const alt = node.getAttribute('alt') || '';
-    const src = node.getAttribute('src') || '';
-    return src ? `![${alt}](${src})\n\n` : '';
+    const alt = imgAlt(node);
+    const src = imgSrc(node);
+    if (!src) return '';
+    return `![${alt}](${src})\n\n`;
   }
-  if (BLOCK_TAGS.has(tag)) {
+
+  if (tag === 'figure') {
+    const img = node.querySelector('img');
+    const cap = node.querySelector('figcaption');
+    let out = '';
+    if (img) {
+      const alt = imgAlt(img);
+      const src = imgSrc(img);
+      if (src) out += `![${alt}](${src})\n\n`;
+    }
+    if (cap) {
+      const text = normalizeWhitespace(Array.from(cap.childNodes).map(inline).join(''));
+      if (text) out += `*${text}*\n\n`;
+    }
+    return out;
+  }
+
+  if (tag === 'details') {
+    const summary = node.querySelector('summary');
+    const inner = Array.from(node.childNodes).filter((n) => n.nodeType !== 1 || n.tagName.toLowerCase() !== 'summary').map((n) => block(n, depth + 1)).join('');
+    const sumText = summary ? normalizeWhitespace(Array.from(summary.childNodes).map(inline).join('')) : 'Details';
+    return `<details>\n<summary>${sumText}</summary>\n\n${inner.trim()}\n\n</details>\n\n`;
+  }
+
+  if (BLOCK_TAGS.has(tag) || tag === 'div' || tag === 'section' || tag === 'article') {
     return Array.from(node.childNodes).map((n) => block(n, depth + 1)).join('');
   }
+
   return Array.from(node.childNodes).map((n) => block(n, depth + 1)).join('');
 }
 
@@ -198,34 +555,69 @@ function renderTable(table) {
   const rows = Array.from(table.querySelectorAll('tr'));
   if (!rows.length) return '';
   const out = [];
+  let hasHeader = false;
   for (let i = 0; i < rows.length; i++) {
-    const cells = Array.from(rows[i].querySelectorAll('th, td'));
+    const row = rows[i];
+    const ths = Array.from(row.querySelectorAll('th'));
+    const tds = Array.from(row.querySelectorAll('td'));
+    const cells = ths.length ? ths : tds;
     if (!cells.length) continue;
-    const line = '| ' + cells.map((c) => Array.from(c.childNodes).map(inline).join('').trim().replace(/\|/g, '\\|')).join(' | ') + ' |';
+    if (ths.length) hasHeader = true;
+    const line = '| ' + cells.map((c) => normalizeWhitespace(Array.from(c.childNodes).map(inline).join('')).replace(/\|/g, '\\|').replace(/\n+/g, ' ')).join(' | ') + ' |';
     out.push(line);
-    if (i === 0) {
+    if (i === 0 && !hasHeader && tds.length) {
       out.push('| ' + cells.map(() => '---').join(' | ') + ' |');
     }
+  }
+  if (out.length && !hasHeader && out[0].startsWith('|') && out.length > 1) {
+    // already added separator after first row above
+  } else if (out.length && hasHeader) {
+    out.splice(1, 0, '| ' + Array.from(rows[0].querySelectorAll('th')).map(() => '---').join(' | ') + ' |');
   }
   return out.join('\n');
 }
 
-function htmlToMd(html) {
+function dedupHeadings(root, pageTitle) {
+  if (!pageTitle) return;
+  const norm = pageTitle.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!norm) return;
+  const firstHeading = root.querySelector('h1, h2, h3');
+  if (!firstHeading) return;
+  const headingText = (firstHeading.textContent || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (headingText === norm) {
+    firstHeading.remove();
+  }
+}
+
+function collapseBlankLines(s) {
+  return s.replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+
+function htmlToMd(html, opts = {}) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const main = pickMain(doc);
   if (!main) return { md: '', meta: {} };
   const cleaned = clean(main);
-  const md = block(cleaned).replace(/\n{3,}/g, '\n\n').trim();
+
+  const pageTitle = getMeta(doc, 'title') || doc.title || '';
+  if (opts.dedupFirstHeading !== false) {
+    dedupHeadings(cleaned, pageTitle);
+  }
+
+  const md = collapseBlankLines(block(cleaned));
+
   return {
     md,
     meta: {
-      title: getMeta(doc, 'title') || doc.title || '',
+      title: pageTitle,
       description: getMeta(doc, 'description') || '',
       author: getMeta(doc, 'author') || '',
       url: doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '',
     },
   };
 }
+
+const state = { current: null };
 
 function getActiveMode() {
   const active = document.querySelector('.seg.active');
@@ -260,8 +652,6 @@ function setBusy(busy) {
   document.getElementById('copy').disabled = busy || !state.current?.md;
   document.getElementById('download').disabled = busy || !state.current?.md;
 }
-
-const state = { current: null };
 
 async function runConversion() {
   const mode = getActiveMode();
