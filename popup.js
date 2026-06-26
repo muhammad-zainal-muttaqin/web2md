@@ -42,6 +42,24 @@ const MAIN_SELECTORS = [
   '#body',
 ];
 
+// Per-site extraction rules (curl.md style). Highest-priority content roots
+// for known sites; falls back to the generic candidate scan when no rule hits.
+const SITE_RULES = [
+  { match: /(^|\.)github\.com$/i, contentSelectors: ['.markdown-body', 'article.markdown-body', '#readme article', '.repository-content'] },
+  { match: /(^|\.)wikipedia\.org$/i, contentSelectors: ['#mw-content-text .mw-parser-output', '#mw-content-text', '#bodyContent'] },
+  { match: /(^|\.)developer\.mozilla\.org$/i, contentSelectors: ['main#content', 'article.main-page-content', '.main-page-content'] },
+  { match: /(^|\.)stackoverflow\.com$/i, contentSelectors: ['#mainbar', '.question', '.answer'] },
+  { match: /(^|\.)medium\.com$/i, contentSelectors: ['article'] },
+  { match: /(^|\.)reddit\.com$/i, contentSelectors: ['shreddit-post', '[data-test-id="post-content"]', '.thing'] },
+  { match: /(^|\.)dev\.to$/i, contentSelectors: ['#article-body', '.crayons-article__main', 'article'] },
+  { match: /(^|\.)substack\.com$/i, contentSelectors: ['.available-content', 'article'] },
+];
+
+function matchRule(hostname) {
+  if (!hostname) return null;
+  return SITE_RULES.find((r) => r.match.test(hostname)) || null;
+}
+
 const NOISE_TAGS = new Set([
   'script', 'style', 'noscript', 'iframe', 'svg', 'path', 'link', 'meta',
   'form', 'button', 'input', 'select', 'textarea', 'label', 'fieldset', 'legend',
@@ -137,10 +155,6 @@ const NOISE_ID_CLASS_RE = new RegExp([
   'series[-_ ]?nav',
   'next[-_ ]?prev',
   'prev[-_ ]?next',
-  'wp[-_ ]?block',
-  'elementor',
-  'wpb_wrapper',
-  'flavor',
   'next[-_ ]?chapter',
   'prev[-_ ]?chapter',
   'chapter[-_ ]?list',
@@ -176,6 +190,7 @@ const NOISE_ROLES = new Set([
 ]);
 
 const JAVASCRIPT_HREF_RE = /^(javascript|vbscript|data):/i;
+const ABSOLUTE_HREF_RE = /^(https?:|mailto:|tel:|data:|javascript:|vbscript:|#)/i;
 const TRACKER_DOMAIN_RE = /(sstatic\d*\.histats\.com|google-analytics\.com|googletagmanager\.com|doubleclick\.net|facebook\.com\/tr|analytics\.twitter\.com|connect\.facebook\.net|mc\.yandex\.ru|hotjar\.com|cdn\.segment\.io|mixpanel\.com|amplitude\.com|fullstory\.com|logrocket\.com)/i;
 
 function setStatus(text, state = '') {
@@ -202,35 +217,71 @@ function getMeta(doc, name) {
   return '';
 }
 
-function pickMain(doc) {
+// ── Content extraction (curl.md-style pipeline) ──────────────────────────────
+
+function linkTextLength(node) {
+  let total = 0;
+  node.querySelectorAll('a').forEach((a) => {
+    total += (a.textContent || '').trim().length;
+  });
+  return total;
+}
+
+function linkDensity(node) {
+  const text = (node.textContent || '').trim().length;
+  if (!text) return 0;
+  return linkTextLength(node) / text;
+}
+
+// Readability-flavoured score: reward prose, punish link-heavy nav blocks.
+function scoreCandidate(node) {
+  const text = (node.textContent || '').trim();
+  const len = text.length;
+  if (len < 50) return 0;
+  const density = linkDensity(node);
+  const paras = node.querySelectorAll('p').length;
+  const commas = (text.match(/,|，|、/g) || []).length;
+  let score = len;
+  score -= len * density * 1.5;
+  score += paras * 25;
+  score += commas * 3;
+  if (density > 0.5) score *= 0.3;
+  return score;
+}
+
+// Collect an ordered list of candidate content roots instead of committing to
+// one. Site-rule selectors are tried first, then semantic tags, then the
+// generic selector list, then a density scan.
+function collectCandidates(doc, rule) {
   const root = doc.body;
-  if (!root) return null;
-  let best = null;
-  let bestScore = 0;
+  if (!root) return [];
+  const seen = new Set();
+  const candidates = [];
+  const add = (node, selector, boost = 0) => {
+    if (!node || node.nodeType !== 1 || seen.has(node)) return;
+    const text = (node.textContent || '').trim();
+    if (text.length < 50) return;
+    seen.add(node);
+    candidates.push({ node, selector, score: scoreCandidate(node) + boost });
+  };
+
+  if (rule && rule.contentSelectors) {
+    for (const sel of rule.contentSelectors) {
+      root.querySelectorAll(sel).forEach((n) => add(n, 'rule:' + sel, 1e7));
+    }
+  }
+  ['main article', 'article', 'main', '[role="main"]'].forEach((sel) => {
+    root.querySelectorAll(sel).forEach((n) => add(n, sel));
+  });
   for (const sel of MAIN_SELECTORS) {
-    const node = root.querySelector(sel);
-    if (!node) continue;
-    const text = (node.textContent || '').trim();
-    if (text.length < 100) continue;
-    const linkPenalty = node.querySelectorAll('a').length * 3;
-    const score = text.length - linkPenalty;
-    if (score > bestScore) {
-      best = node;
-      bestScore = score;
-    }
+    root.querySelectorAll(sel).forEach((n) => add(n, sel));
   }
-  if (best) return best;
-  const all = root.querySelectorAll('div, section, article');
-  for (const node of all) {
-    const text = (node.textContent || '').trim();
-    const linkPenalty = node.querySelectorAll('a').length * 3;
-    const score = text.length - linkPenalty;
-    if (score > bestScore) {
-      best = node;
-      bestScore = score;
-    }
-  }
-  return best || root;
+  const densityNodes = root.querySelectorAll('div, section, article');
+  const scanLimit = Math.min(densityNodes.length, 4000); // bound work on huge pages
+  for (let i = 0; i < scanLimit; i++) add(densityNodes[i], 'density');
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates;
 }
 
 function shouldSkipEl(el) {
@@ -263,39 +314,43 @@ function shouldSkipImg(img) {
   return false;
 }
 
-function clean(root) {
-  const cloned = root.cloneNode(true);
-
+// Pass 1: strip noise. Unlike a blunt class match, an element is protected from
+// removal when it holds most of the candidate's text — that means we'd be
+// gutting real content (the over-strip that produced "header only" output).
+function stripNoise(root) {
   for (const tag of NOISE_TAGS) {
-    cloned.querySelectorAll(tag).forEach((el) => el.remove());
+    root.querySelectorAll(tag).forEach((el) => el.remove());
   }
 
-  const all = Array.from(cloned.querySelectorAll('*'));
-  for (const el of all) {
-    if (shouldSkipEl(el)) {
-      el.remove();
-    }
+  const totalText = (root.textContent || '').trim().length || 1;
+
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    if (!root.contains(el)) continue;
+    if (!shouldSkipEl(el)) continue;
+    const elText = (el.textContent || '').trim().length;
+    if (elText > totalText * 0.6) continue; // too big to be noise — keep content
+    el.remove();
   }
 
-  cloned.querySelectorAll('img').forEach((img) => {
+  // Link-density removal: drop nav/menu/related blocks made mostly of links.
+  for (const el of Array.from(root.querySelectorAll('div, section, ul, ol, nav'))) {
+    if (!root.contains(el)) continue;
+    const text = (el.textContent || '').trim();
+    if (text.length < 40) continue;
+    const nonLink = text.length - linkTextLength(el);
+    if (linkDensity(el) > 0.6 && nonLink < 80) el.remove();
+  }
+
+  root.querySelectorAll('img').forEach((img) => {
     if (shouldSkipImg(img)) img.remove();
   });
 
-  cloned.querySelectorAll('a[href]').forEach((a) => {
-    const href = a.getAttribute('href') || '';
-    if (JAVASCRIPT_HREF_RE.test(href.trim())) {
+  root.querySelectorAll('a[href]').forEach((a) => {
+    const href = (a.getAttribute('href') || '').trim();
+    if (JAVASCRIPT_HREF_RE.test(href) || href === '#') {
       const text = a.textContent || '';
       if (text.trim()) {
-        const span = cloned.ownerDocument.createElement('span');
-        span.textContent = text;
-        a.replaceWith(span);
-      } else {
-        a.remove();
-      }
-    } else if (href === '#') {
-      const text = a.textContent || '';
-      if (text.trim()) {
-        const span = cloned.ownerDocument.createElement('span');
+        const span = a.ownerDocument.createElement('span');
         span.textContent = text;
         a.replaceWith(span);
       } else {
@@ -304,10 +359,66 @@ function clean(root) {
     }
   });
 
-  cloned.querySelectorAll('[style]').forEach((el) => el.removeAttribute('style'));
-  cloned.querySelectorAll('[width="0"], [height="0"]').forEach((el) => el.remove());
+  root.querySelectorAll('[style]').forEach((el) => el.removeAttribute('style'));
+  root.querySelectorAll('[width="0"], [height="0"]').forEach((el) => el.remove());
 
-  return cloned;
+  return root;
+}
+
+// Pass 2: resolve relative href/src to absolute using the page base URL.
+function resolveLinks(root, baseUrl) {
+  if (!baseUrl) return root;
+  const fix = (el, attr) => {
+    const v = (el.getAttribute(attr) || '').trim();
+    if (!v || ABSOLUTE_HREF_RE.test(v)) return;
+    try {
+      el.setAttribute(attr, new URL(v, baseUrl).href);
+    } catch (e) {
+      /* leave as-is on invalid URL */
+    }
+  };
+  root.querySelectorAll('a[href]').forEach((a) => fix(a, 'href'));
+  root.querySelectorAll('img').forEach((img) => {
+    ['src', 'data-src', 'data-lazy-src', 'data-original'].forEach((at) => {
+      if (img.hasAttribute(at)) fix(img, at);
+    });
+  });
+  return root;
+}
+
+// Pass 3: flatten syntax-highlighted code so span-soup doesn't leak markers.
+function normalizePreCode(root) {
+  root.querySelectorAll('pre').forEach((pre) => {
+    pre.querySelectorAll('.line-number, .line-numbers-rows, .linenos, .gutter, [aria-hidden="true"]').forEach((n) => n.remove());
+    const code = pre.querySelector('code') || pre;
+    if (code.children.length > 0) {
+      const text = code.textContent || '';
+      while (code.firstChild) code.removeChild(code.firstChild);
+      code.textContent = text;
+    }
+  });
+  return root;
+}
+
+// Pass 4: remove now-empty wrappers left behind by the earlier passes.
+function stripEmpty(root) {
+  const SEL = 'div, section, span, p, li, ul, ol, article, header, footer, aside, blockquote';
+  let changed = true;
+  let guard = 0;
+  while (changed && guard < 5) {
+    changed = false;
+    guard++;
+    for (const el of Array.from(root.querySelectorAll(SEL))) {
+      if (!root.contains(el)) continue;
+      const text = (el.textContent || '').trim();
+      const hasMedia = el.querySelector('img, pre, table, code, hr');
+      if (!text && !hasMedia) {
+        el.remove();
+        changed = true;
+      }
+    }
+  }
+  return root;
 }
 
 function normalizeWhitespace(s) {
@@ -334,6 +445,20 @@ function imgSrc(img) {
   return getAttr(img, 'src') || getAttr(img, 'data-src') || getAttr(img, 'data-lazy-src') || getAttr(img, 'data-original') || '';
 }
 
+// Escape markdown link/image text and wrap awkward URLs so parentheses or
+// spaces in a destination can't break the surrounding [text](url) syntax
+// (e.g. Wikipedia's .../Convention_(norm)).
+function mdLinkText(s) {
+  return (s || '').replace(/([\[\]])/g, '\\$1');
+}
+
+function mdUrl(href) {
+  const h = (href || '').trim();
+  if (!h) return h;
+  if (/[\s()<>]/.test(h)) return '<' + h.replace(/</g, '%3C').replace(/>/g, '%3E') + '>';
+  return h;
+}
+
 function inline(node) {
   if (node.nodeType === 3) {
     return node.nodeValue.replace(/[\t ]+/g, ' ').replace(/\n/g, ' ');
@@ -349,7 +474,7 @@ function inline(node) {
     if (!text) return '';
     if (!href) return text;
     if (JAVASCRIPT_HREF_RE.test(href) || href === '#') return text;
-    return `[${text}](${href})`;
+    return `[${mdLinkText(text)}](${mdUrl(href)})`;
   }
   if (tag === 'strong' || tag === 'b') {
     const text = Array.from(node.childNodes).map(inline).join('').trim();
@@ -371,7 +496,7 @@ function inline(node) {
     const alt = imgAlt(node);
     const src = imgSrc(node);
     if (!src) return '';
-    return `![${alt}](${src})`;
+    return `![${mdLinkText(alt)}](${mdUrl(src)})`;
   }
   if (tag === 'mark') {
     const text = Array.from(node.childNodes).map(inline).join('').trim();
@@ -518,7 +643,7 @@ function block(node, depth = 0) {
     const alt = imgAlt(node);
     const src = imgSrc(node);
     if (!src) return '';
-    return `![${alt}](${src})\n\n`;
+    return `![${mdLinkText(alt)}](${mdUrl(src)})\n\n`;
   }
 
   if (tag === 'figure') {
@@ -528,7 +653,7 @@ function block(node, depth = 0) {
     if (img) {
       const alt = imgAlt(img);
       const src = imgSrc(img);
-      if (src) out += `![${alt}](${src})\n\n`;
+      if (src) out += `![${mdLinkText(alt)}](${mdUrl(src)})\n\n`;
     }
     if (cap) {
       const text = normalizeWhitespace(Array.from(cap.childNodes).map(inline).join(''));
@@ -593,28 +718,165 @@ function collapseBlankLines(s) {
   return s.replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }
 
+// Run the full clean+convert pipeline on a single candidate node.
+function convertNode(srcNode, doc, baseUrl, opts) {
+  if (!srcNode) return '';
+  const clone = srcNode.cloneNode(true);
+  // Neutralise the root's own identity so it can't be skipped as "noise" and
+  // so it survives the empty/strip passes — descendants are still evaluated.
+  if (clone.removeAttribute) {
+    ['class', 'id', 'role', 'aria-label', 'aria-hidden'].forEach((a) => clone.removeAttribute(a));
+  }
+  stripNoise(clone);
+  resolveLinks(clone, baseUrl);
+  normalizePreCode(clone);
+  stripEmpty(clone);
+  if (!opts || opts.dedupFirstHeading !== false) {
+    dedupHeadings(clone, opts && opts.pageTitle);
+  }
+  let md;
+  try {
+    md = block(clone);
+  } catch (e) {
+    // Deeply nested / pathological DOM can overflow the recursion — fall back
+    // to plain text so we still return content instead of crashing the popup.
+    md = normalizeWhitespace(clone.textContent || '');
+  }
+  return collapseBlankLines(md);
+}
+
+// curl.md-style "thin content" guard: a few chars, a couple lines, or no prose.
+function isThin(md) {
+  if (!md) return true;
+  const trimmed = md.trim();
+  if (trimmed.length < 120) return true;
+  const lines = trimmed.split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length <= 3) return true;
+  const hasProse = lines.some((l) => {
+    const t = l.trim();
+    if (/^#{1,6}\s/.test(t)) return false;
+    return t.length > 60;
+  });
+  return !hasProse;
+}
+
+// Try candidates in score order, stop at the first solid one, and always keep a
+// full-body fallback. Pick the best non-thin result by length so a header-only
+// candidate can never win when a richer extraction exists.
+function extractBest(doc, opts, rule, baseUrl) {
+  const candidates = collectCandidates(doc, rule).slice(0, 8);
+  const results = [];
+  for (const c of candidates) {
+    const md = convertNode(c.node, doc, baseUrl, opts);
+    results.push({ md, method: c.selector, len: md.trim().length });
+    if (!isThin(md)) break;
+  }
+  const bestSoFar = results.slice().sort((a, b) => b.len - a.len)[0];
+  if (!bestSoFar || isThin(bestSoFar.md)) {
+    const bodyMd = convertNode(doc.body, doc, baseUrl, opts);
+    results.push({ md: bodyMd, method: 'body', len: bodyMd.trim().length });
+  }
+  const nonThin = results.filter((r) => !isThin(r.md));
+  const pool = nonThin.length ? nonThin : results;
+  pool.sort((a, b) => b.len - a.len);
+  return pool[0] || { md: '', method: 'none' };
+}
+
+function detectSpa(doc) {
+  const mounts = ['#__next', '#__nuxt', '#app', '#root', '[data-reactroot]', '[data-server-rendered]'];
+  for (const sel of mounts) {
+    const el = doc.querySelector(sel);
+    if (el && (el.textContent || '').trim().length < 50) return true;
+  }
+  return false;
+}
+
+function getBaseUrl(doc, fallback) {
+  const tryUrl = (v) => {
+    if (!v) return '';
+    try {
+      return new URL(v).href;
+    } catch (e) {
+      return '';
+    }
+  };
+  return (
+    tryUrl(doc.querySelector('base[href]')?.getAttribute('href')) ||
+    tryUrl(doc.querySelector('link[rel="canonical"]')?.getAttribute('href')) ||
+    tryUrl(getMeta(doc, 'og:url')) ||
+    tryUrl(fallback) ||
+    ''
+  );
+}
+
+function getHostname(url) {
+  if (!url) return '';
+  try {
+    return new URL(url).hostname;
+  } catch (e) {
+    return '';
+  }
+}
+
+function estimateTokens(text) {
+  if (!text) return 0;
+  return Math.round(text.length / 4); // ~4 chars/token, approximate
+}
+
+function extractMeta(doc) {
+  const meta = {
+    title: getMeta(doc, 'og:title') || getMeta(doc, 'title') || doc.title || '',
+    description: getMeta(doc, 'description') || getMeta(doc, 'og:description') || '',
+    author: getMeta(doc, 'author') || getMeta(doc, 'article:author') || '',
+    published: getMeta(doc, 'article:published_time') || getMeta(doc, 'og:article:published_time') || '',
+    site: getMeta(doc, 'og:site_name') || '',
+    url: doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || getMeta(doc, 'og:url') || '',
+  };
+
+  try {
+    doc.querySelectorAll('script[type="application/ld+json"]').forEach((s) => {
+      const raw = s.textContent || '';
+      if (!raw || raw.length > 250000) return; // skip empty / pathologically large blobs
+      const data = JSON.parse(raw);
+      if (!data) return;
+      let nodes = Array.isArray(data) ? data : [data];
+      const graphed = [];
+      for (const n of nodes) {
+        if (n && Array.isArray(n['@graph'])) graphed.push(...n['@graph']);
+        else graphed.push(n);
+      }
+      for (const obj of graphed) {
+        if (!obj || typeof obj !== 'object') continue;
+        if (!meta.title && obj.headline) meta.title = String(obj.headline);
+        if (!meta.description && obj.description) meta.description = String(obj.description);
+        if (!meta.published && obj.datePublished) meta.published = String(obj.datePublished);
+        if (!meta.author && obj.author) {
+          meta.author = typeof obj.author === 'string' ? obj.author : (obj.author.name || '');
+        }
+      }
+    });
+  } catch (e) {
+    /* ignore malformed JSON-LD */
+  }
+  return meta;
+}
+
 function htmlToMd(html, opts = {}) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  const main = pickMain(doc);
-  if (!main) return { md: '', meta: {} };
-  const cleaned = clean(main);
+  if (!doc || !doc.body) return { md: '', meta: {} };
 
-  const pageTitle = getMeta(doc, 'title') || doc.title || '';
-  if (opts.dedupFirstHeading !== false) {
-    dedupHeadings(cleaned, pageTitle);
-  }
+  const meta = extractMeta(doc);
+  const baseUrl = getBaseUrl(doc, opts.baseUrl);
+  const rule = matchRule(getHostname(baseUrl || meta.url || opts.baseUrl));
+  const spa = detectSpa(doc);
 
-  const md = collapseBlankLines(block(cleaned));
+  const best = extractBest(doc, { ...opts, pageTitle: meta.title }, rule, baseUrl);
 
-  return {
-    md,
-    meta: {
-      title: pageTitle,
-      description: getMeta(doc, 'description') || '',
-      author: getMeta(doc, 'author') || '',
-      url: doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '',
-    },
-  };
+  meta.method = best.method + (rule ? ' +rule' : '');
+  meta.tokens = String(estimateTokens(best.md));
+  if (spa) meta.spa = 'yes';
+
+  return { md: best.md, meta };
 }
 
 const state = { current: null };
@@ -659,57 +921,96 @@ async function runConversion() {
   setStatus('Converting…', 'loading');
   try {
     let html = '';
+    let baseUrl = '';
     if (mode === 'paste') {
       const ta = document.querySelector('#html-input');
       html = ta.value.trim();
       if (!html) throw new Error('Paste HTML first');
     } else {
-      html = await readTabHTML();
+      const captured = await readTabHTML();
+      html = captured.html;
+      baseUrl = captured.url;
     }
-    const { md, meta } = htmlToMd(html);
+    const { md, meta } = htmlToMd(html, { baseUrl });
     const title = (meta.title || 'untitled').replace(/[^\w\s-]/g, '').trim().slice(0, 80) || 'untitled';
     state.current = { md, raw: html, meta: { ...meta, title } };
     document.getElementById('result-section').hidden = false;
     renderView('md');
     setBusy(false);
-    setStatus(`Converted ${md.length.toLocaleString()} chars`, 'success');
+    if (!md.trim()) {
+      setStatus(meta.spa === 'yes'
+        ? 'SPA shell — let the page finish loading, then Convert'
+        : 'No readable content found — try Paste HTML', 'error');
+      return;
+    }
+    const extra = meta.spa === 'yes' ? ' · SPA (live DOM)' : '';
+    setStatus(`Converted ${md.length.toLocaleString()} chars${extra}`, 'success');
   } catch (e) {
     setBusy(false);
     setStatus(e.message || 'Failed', 'error');
   }
 }
 
+const RESTRICTED_URL_RE = /^(chrome|edge|brave|opera|vivaldi|about|chrome-extension|moz-extension|devtools|view-source):/i;
+const WEBSTORE_RE = /\/\/(chrome\.google\.com\/webstore|chromewebstore\.google\.com|microsoftedge\.microsoft\.com)\//i;
+
 async function readTabHTML() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error('No active tab');
-  const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: () => {
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      return sleep(250).then(() => document.documentElement.outerHTML);
-    },
-  });
-  return result || '';
+  const url = tab.url || '';
+  if (RESTRICTED_URL_RE.test(url) || WEBSTORE_RE.test(url)) {
+    throw new Error('Can’t read browser pages — use Paste HTML');
+  }
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        // Nudge lazy-loaded / infinite-scroll content into the DOM before capture.
+        try {
+          const h = document.body ? document.body.scrollHeight : 0;
+          window.scrollTo(0, h);
+          await sleep(350);
+          window.scrollTo(0, 0);
+        } catch (e) {
+          /* ignore scroll failures (e.g. restricted pages) */
+        }
+        await sleep(250);
+        return document.documentElement.outerHTML;
+      },
+    });
+  } catch (e) {
+    throw new Error('Can’t access this page — try Paste HTML');
+  }
+  const html = results && results[0] ? results[0].result : '';
+  if (!html) throw new Error('Empty page — nothing to convert');
+  return { html, url };
 }
 
 async function copyToClipboard() {
   const data = getCurrentResult();
   if (!data.md) return;
-  await navigator.clipboard.writeText(data.md);
-  setStatus('Copied to clipboard', 'success');
+  try {
+    await navigator.clipboard.writeText(data.md);
+    setStatus('Copied to clipboard', 'success');
+  } catch (e) {
+    setStatus('Copy failed — select the text manually', 'error');
+  }
 }
 
 function downloadMarkdown() {
   const data = getCurrentResult();
   if (!data.md) return;
-  const title = data.meta?.title || 'untitled';
+  const title = (data.meta?.title || 'untitled').replace(/[^\w\s-]/g, '').trim().slice(0, 80) || 'untitled';
   const blob = new Blob([data.md], { type: 'text/markdown' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = `${title}.md`;
   a.click();
-  URL.revokeObjectURL(url);
+  // Defer revoke so the download isn't cancelled before it starts.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 document.querySelectorAll('.seg').forEach((btn) => {

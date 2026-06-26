@@ -18,8 +18,8 @@ features:
     details: Open the popup, click Convert, get clean Markdown. The active tab is read in the ISOLATED world — no scripts, no logins touched.
   - title: Paste HTML fallback
     details: For paywalled or login-walled pages, just paste the HTML (View Source → Ctrl+A → Ctrl+C → Ctrl+V). Works without any site access.
-  - title: Smart content extraction
-    details: 30+ site-aware selectors pick the main article. Density-based fallback handles the long tail. Outputs clean, linkified Markdown.
+  - title: Robust content extraction
+    details: A curl.md-style pipeline ranks multiple candidate roots (site rules, semantic tags, 30+ selectors, density scan) and falls back automatically when a candidate is too thin — so you never get "header only" output.
   - title: Privacy first
     details: Runs entirely in your browser. Zero network calls. Zero analytics. No data leaves your machine.
   - title: Copy or download

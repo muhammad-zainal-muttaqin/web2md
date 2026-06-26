@@ -8,8 +8,10 @@ A minimal Chrome extension that converts the current tab — or pasted HTML — 
 
 - **One-click conversion** — click the icon, click Convert, get Markdown.
 - **Paste HTML fallback** — for paywalled / login-walled pages, paste the raw HTML and convert offline.
-- **Smart content extraction** — 30+ site-aware selectors pick the main article (Wikipedia, GitHub, Reddit, Stack Overflow, MDN, dev.to, blogs, docs sites), with density-based fallback for the long tail.
-- **Aggressive noise stripping** — removes reader settings, chapter nav, comments, ads, tracker pixels, sidebars, and ~80 other class/id/role/aria-label patterns.
+- **Robust content extraction** — a curl.md-style pipeline ranks multiple candidate roots (site rules → semantic tags → 30+ selectors → density scan), then **falls back automatically when a candidate is too thin**, so you never get "header only" output.
+- **Per-site rules** — dedicated content roots for GitHub, Wikipedia, MDN, Stack Overflow, Reddit, dev.to, Medium, Substack; easy to extend.
+- **Safe noise stripping** — removes reader settings, chapter nav, comments, ads, tracker pixels, sidebars, and ~80 class/id/role/aria-label patterns, with **content protection + link-density filtering** so layout wrappers (Elementor, Gutenberg `wp-block`, etc.) never take the article body down with them.
+- **Absolute links** — relative `href`/`src` are resolved against the page URL; highlighted code blocks are flattened to clean fenced code.
 - **GFM output** — strikethrough, task lists, tables, fenced code blocks, definition lists, `<details>`, `<mark>`, sub/sup.
 - **Copy or download** — clipboard copy or `.md` download named after the page title.
 - **Three output views** — Markdown / Raw HTML / Page Meta.
@@ -46,7 +48,10 @@ web2md/
 │   ├── gen-icons.cjs   # Regenerate icons (Node, no deps)
 │   └── test-popup.cjs  # Local converter test (requires jsdom)
 ├── test/
-│   └── sakuranovel-sample.html  # Synthetic sample for testing
+│   ├── sakuranovel-sample.html  # Novel reader sample (regression)
+│   ├── elementor-sample.html    # WordPress/Elementor wrapper sample (header-only fix)
+│   ├── link-heavy-nav.html      # Link-density filtering sample
+│   └── spa-shell.html           # SPA detection sample
 ├── docs/               # VitePress documentation site
 │   ├── .vitepress/
 │   ├── index.md
@@ -112,18 +117,16 @@ It does **not** request `<all_urls>`, history, storage, cookies, or any other br
 ## How it works
 
 1. Click the toolbar icon to open the popup.
-2. Click **Convert**. The popup calls `chrome.scripting.executeScript` to read `document.documentElement.outerHTML` of the active tab.
-3. The HTML is fed into a content extractor that:
-   - Tries 30+ site-aware CSS selectors in order (`main article`, `article`, `.post-content`, `.markdown-body`, `.chapter-content`, etc.).
-   - Falls back to a density-based selector that picks the element with the highest text-to-link ratio.
-   - Strips `script`, `style`, `nav`, `footer`, `aside`, `form`, `input`, `button`, `iframe`, `svg`, `figure`, and ~80 noise patterns matched by class/id/role/aria-label.
-   - Removes tracker pixels (histats, GA, GTM, FB, etc.) and 1×1 images.
-   - Replaces `javascript:` and `#` hrefs with plain text.
+2. Click **Convert**. The popup calls `chrome.scripting.executeScript` to scroll the page (to trigger lazy-loaded content) and read `document.documentElement.outerHTML` of the active tab, along with the tab URL.
+3. The HTML is fed into a **curl.md-style extraction pipeline** (ported to vanilla JS — no build step, no dependencies):
+   - **Candidate selection** — collects multiple candidate content roots: per-site rules first (e.g. GitHub `.markdown-body`, Wikipedia `#mw-content-text`), then semantic tags (`<main>`, `<article>`, `[role=main]`), then 30+ selectors, then a density scan. Each is scored by text length, paragraph count, and link density.
+   - **Clean passes** run on the chosen candidate: `stripNoise` (≈80 noise patterns + tracker pixels) with **content protection** so an element holding most of the text is never removed, plus **link-density filtering** that drops nav/related/footer blocks made mostly of links; `resolveLinks` (relative → absolute); `normalizePreCode` (flatten highlighted code); `stripEmpty` (drop hollow wrappers).
+   - **Thin-content fallback** — if the top candidate converts to too little (`<120` chars / `≤3` lines / no prose), the next candidate is tried, and finally the whole `<body>`. The best non-thin result wins, so a header-only wrapper can never be the final output.
 4. The cleaned DOM is walked to produce GFM-flavored Markdown — headings, paragraphs, lists (including task lists), blockquotes, code blocks, tables, links, images, emphasis, strikethrough, definition lists, `<details>`.
-5. The first heading is auto-removed if it duplicates the page title.
+5. The first heading is auto-removed if it duplicates the page title. Metadata (title, description, author, published date, canonical URL, JSON-LD) plus the extraction `method` and an approximate `tokens` count are surfaced in the **Meta** tab.
 6. Result is shown in three tabs: Markdown / Raw / Meta.
 
-The execution happens in the **ISOLATED** world — page scripts are not affected, and the extension never sees the page's JavaScript context.
+The execution happens in the **ISOLATED** world — page scripts are not affected, and the extension never sees the page's JavaScript context. SPA shells (`#__next`, `#__nuxt`, `#app`, …) are detected and flagged; because the live rendered DOM is read, their content is still captured.
 
 ## Limitations
 

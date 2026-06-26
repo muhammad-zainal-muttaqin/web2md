@@ -8,7 +8,7 @@
 4. Click **Convert**.
 5. The Markdown appears in the output area. Use **Copy** or **.md** to save it.
 
-The extension waits 250ms for SPAs to settle, then reads the rendered HTML.
+The extension scrolls the page to trigger lazy-loaded content, waits for it to settle, then reads the rendered HTML and the tab URL (used to resolve relative links and match per-site rules).
 
 ## Convert pasted HTML
 
@@ -29,7 +29,7 @@ The result panel has three views:
 
 - **Markdown** — the converted output. This is what you want 95% of the time.
 - **Raw** — the source HTML that was fed into the converter. Useful for debugging what was extracted.
-- **Meta** — the page title, description, author, and canonical URL.
+- **Meta** — page title, description, author, published date, site, and canonical URL (from Open Graph / JSON-LD), plus the extraction `method` (which candidate or site rule was used), an approximate `tokens` count, and a `spa` flag when a single-page-app shell is detected.
 
 ## File naming
 
